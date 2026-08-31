@@ -26,10 +26,29 @@ services:
 
     volumes:
       - ./app:/app
+      - app-logs:/app/logs
 
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
     restart: unless-stopped
+  
+  night-shift-worker-agent:
+    build:
+      context: ./night-shift-worker-agent
+    
+    environment:
+      OLLAMA_HOST: ${OLLAMA_HOST}
+    
+    volumes:
+      - app-logs:/app/logs
+      - ./fastapi-app:/workspace/app
+    
+    depends_on:
+      fastapi:
+        condition: service_healthy
+    
+    restart: unless-stopped
+
 
   postgres:
     image: postgres:16
