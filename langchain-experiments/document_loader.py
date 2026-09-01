@@ -1,7 +1,6 @@
 import os
 from dotenv import load_dotenv
 import tempfile
-from pathlib import Path
 from langchain_community.document_loaders import (TextLoader, PyPDFLoader)
 
 load_dotenv()
