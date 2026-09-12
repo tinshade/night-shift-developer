@@ -1,9 +1,12 @@
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionMaker
+from sqlalchemy.orm import sessionmaker
 import os
 
 from sqlalchemy.ext.asyncio import create_async_engine
-import os
+from dotenv import load_dotenv
+
+
+load_dotenv()
 
 DATABASE_URL = (
     f"postgresql+asyncpg://"
@@ -16,8 +19,13 @@ DATABASE_URL = (
 
 engine = create_async_engine(DATABASE_URL)
 
-SessionLocal = sessionMaker(autocommit=False, autoflush=False, bind=engine)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+
+async def init_models():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
 
 def get_db():

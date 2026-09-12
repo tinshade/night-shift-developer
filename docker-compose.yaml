@@ -13,6 +13,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       API_PORT: ${API_PORT}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
 
     ports:
       - "8000:8000"
@@ -23,6 +25,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
 
     volumes:
       - ./app:/app
@@ -31,24 +35,6 @@ services:
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
     restart: unless-stopped
-  
-  night-shift-worker-agent:
-    build:
-      context: ./night-shift-worker-agent
-    
-    environment:
-      OLLAMA_HOST: ${OLLAMA_HOST}
-    
-    volumes:
-      - app-logs:/app/logs
-      - ./fastapi-app:/workspace/app
-    
-    depends_on:
-      fastapi:
-        condition: service_healthy
-    
-    restart: unless-stopped
-
 
   postgres:
     image: postgres:16
@@ -59,6 +45,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PORT: 5432
 
     ports:
       - "5432:5432"
@@ -70,6 +57,20 @@ services:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
+      retries: 5
+
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+
+    ports:
+      - "6379:6379"
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
       retries: 5
 
     restart: unless-stopped
@@ -97,3 +98,4 @@ services:
 
 volumes:
   postgres_data:
+  app-logs:

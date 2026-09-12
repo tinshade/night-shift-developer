@@ -5,7 +5,6 @@ from token_limiter import TokenBudgeting
 from langsmith import traceable
 
 from langchain.chat_models import init_chat_model
-from langchain_core.output_parsers import StrOutputParser
 
 load_dotenv()
 
@@ -31,7 +30,7 @@ class LambLLM:
         
         # Execute
         response = self.llm.invoke(query)
-        result = response.content | StrOutputParser()
+        result = response.content
         
         # Record usage
         output_tokens = self.budget.estimate_tokens(result)

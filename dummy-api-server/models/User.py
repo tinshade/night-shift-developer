@@ -3,7 +3,7 @@ from sqlalchemy import Column, Integer, String, TIMESTAMP, Boolean, text
 
 
 class User(Base):
-    __table_name__ = "users"
+    __tablename__ = "users"
     
     id = Column(Integer, primary_key=True, nullable=False)
     first_name = Column(String, nullable=True)

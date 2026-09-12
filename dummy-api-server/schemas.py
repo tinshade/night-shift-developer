@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
+from enum import Enum
 
 
 class UserBase(BaseModel):
@@ -23,3 +24,23 @@ class User(UserBase):
 
     class Config:
         from_attributes = True
+
+
+class LogStatus(str, Enum):
+    open = "open"
+    in_progress = "in_progress"
+    fixed = "fixed"
+    wontfix = "wontfix"
+
+
+class LogCreate(BaseModel):
+    type: str
+    application: str
+    message: str
+    trace: str = ""
+    status: LogStatus = LogStatus.open
+
+
+class LogRecord(LogCreate):
+    guid: str
+    datetime: datetime
