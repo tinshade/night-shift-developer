@@ -1,4 +1,5 @@
 from tools.github_mcp import GitHubMCP
+from repair_workflow import RepairWorkflow
 
 
 def test_publish_repair_requires_local_changes():
@@ -35,3 +36,13 @@ def test_publish_repair_runs_branch_commit_push_and_pr():
     assert ("branch", "repair/guid", "dev") in calls
     assert ("pr", "repair/guid", "dev") in calls
     assert ("git", ["push", "origin", "repair/guid"]) in calls
+
+
+def test_repair_branch_uses_ai_fix_prefix_and_error_slug():
+    branch = RepairWorkflow._repair_branch_name(
+        "1234567890abcdef",
+        {"message": "Database connection timeout on users API"},
+    )
+
+    assert branch.startswith("ai-fix/database-connection-timeout-on-users-api-")
+    assert branch.endswith("-12345678")

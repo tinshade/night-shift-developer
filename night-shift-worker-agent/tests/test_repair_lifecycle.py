@@ -54,6 +54,25 @@ def test_workflow_sends_configured_email_notification(tmp_path, monkeypatch):
     assert sent[0]["guid"] == "email-guid"
 
 
+def test_workflow_notification_includes_original_stacktrace(tmp_path, monkeypatch):
+    registry = MCPRegistry(str(tmp_path / "workspaces"))
+    sent = []
+    registry.registry.get("send_repair_result").handler = lambda **payload: sent.append(payload)
+    monkeypatch.setenv("ENABLE_EMAIL_NOTIFICATIONS", "true")
+    monkeypatch.setenv("REPAIR_NOTIFICATION_EMAIL", "developer@example.com")
+    workflow = RepairWorkflow(str(tmp_path / "workspaces"), registry, runner=PassingRunner())
+
+    workflow.run(
+        "trace-guid",
+        make_source(tmp_path),
+        record={"message": "Database failure", "trace": "Traceback (most recent call last):\n  File \"app.py\", line 7"},
+    )
+
+    assert "Database failure" in sent[0]["diagnostics"]
+    assert "Stacktrace:" in sent[0]["diagnostics"]
+    assert "app.py" in sent[0]["diagnostics"]
+
+
 def test_exhausted_workflow_is_terminal_and_cleans_workspace(tmp_path):
     registry = MCPRegistry(str(tmp_path / "workspaces"))
     workflow = RepairWorkflow(

@@ -3,15 +3,14 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from tools.base import ToolError
-
-
 CODE_MODEL_DEFAULT = "openai/gpt-oss-120b"
 OPERATIONS_MODEL_DEFAULT = "openai/gpt-oss-20b"
 
 
 def create_groq_model(role: str, *, api_key: str | None = None, model: str | None = None) -> Any:
     """Create a Groq LangChain model for the requested task role."""
+    from tools.base import ToolError
+
     if role == "code":
         model_name = model or os.getenv("GROQ_CODE_MODEL") or os.getenv("GROQ_FREE_MODEL") or CODE_MODEL_DEFAULT
     elif role == "operations":

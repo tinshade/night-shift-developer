@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,24 @@ class RepairWorkflow:
         self.registry = registry
         self.runner = runner or IsolatedRepairRunner(registry, int(os.getenv("REPAIR_TIMEOUT_SECONDS", "600")))
         self.llm_client = llm_client or LLMRepairClient(registry)
+
+    @staticmethod
+    def _repair_branch_name(guid: str, record: dict) -> str:
+        error_text = record.get("message") or record.get("exception_type") or "application-error"
+        slug = re.sub(r"[^a-z0-9]+", "-", error_text.lower()).strip("-")[:60]
+        slug = slug or "application-error"
+        return f"ai-fix/{slug}-{guid[:8]}"
+
+    @staticmethod
+    def _notification_diagnostics(record: dict, repair_diagnostics: str) -> str:
+        sections = []
+        if record.get("message"):
+            sections.append(f"Original error:\n{record['message']}")
+        if record.get("trace"):
+            sections.append(f"Stacktrace:\n{record['trace']}")
+        if repair_diagnostics:
+            sections.append(f"Repair diagnostics:\n{repair_diagnostics}")
+        return "\n\n".join(sections)
 
     def run(self, guid: str, source_repo: str | Path, record: dict | None = None, *, max_attempts: int | None = None) -> RepairWorkflowResult:
         attempt = self.session.begin(guid=guid, source_repo=source_repo)
@@ -67,7 +86,7 @@ class RepairWorkflow:
                 )
                 if os.getenv("ENABLE_GITHUB_REPAIR", "false").lower() == "true":
                     try:
-                        branch = f"repair/{guid}"
+                        branch = self._repair_branch_name(guid, record)
                         final.pr_url = self.registry.call(
                             "publish_repair",
                             workspace=attempt.source_path,
@@ -117,7 +136,7 @@ class RepairWorkflow:
                     guid=guid,
                     summary=final.summary,
                     pr_url=final.pr_url or None,
-                    diagnostics=final.remaining_error or None,
+                    diagnostics=self._notification_diagnostics(record, final.remaining_error) or None,
                 )
             except Exception as exc:
                 final.notification_error = str(exc)
