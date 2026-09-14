@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,8 @@ from typing import Any
 from repair_llm import LLMRepairClient
 from repair_runner import IsolatedRepairRunner, RepairDiagnostics
 from repair_session import RepairSession
+
+logger = logging.getLogger("night-shift-repair-workflow")
 
 
 @dataclass
@@ -60,6 +63,7 @@ class RepairWorkflow:
         cleanup_errors: list[str] = []
 
         for attempt_index in range(max_attempts):
+            logger.info("Starting repair attempt guid=%s attempt=%s/%s", guid, attempt_index + 1, max_attempts)
             try:
                 diagnostics = self.runner.run(guid, attempt.source_path)
             except Exception as exc:
@@ -79,6 +83,7 @@ class RepairWorkflow:
             if not diagnostics.cleanup_ok:
                 cleanup_errors.append(diagnostics.cleanup_error)
             if diagnostics.passed:
+                logger.info("Repair validation passed guid=%s", guid)
                 final = RepairWorkflowResult(
                     status="fixed",
                     summary="Validation passed in the isolated repair environment.",
@@ -105,6 +110,7 @@ class RepairWorkflow:
                 )
                 break
             try:
+                logger.info("Requesting Groq repair patch guid=%s", guid)
                 patch = self.llm_client.propose_and_apply(record, diagnostics.output, attempt.source_path)
             except Exception as exc:
                 final = RepairWorkflowResult(status="wontfix", summary=f"LLM repair failed: {exc}", remaining_error=diagnostics.output)
@@ -154,4 +160,5 @@ class RepairWorkflow:
         except Exception as exc:
             final.cleanup_ok = False
             final.cleanup_error = "\n".join(filter(None, [final.cleanup_error, f"delete_workspace {guid}: {exc}"]))
+        logger.info("Repair workflow completed guid=%s status=%s", guid, final.status)
         return final

@@ -133,6 +133,15 @@ services:
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      REPAIR_SOURCE_REPOSITORY: /source
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      GROQ_FREE_MODEL: ${GROQ_FREE_MODEL}
+      GROQ_CODE_MODEL: ${GROQ_CODE_MODEL:-openai/gpt-oss-120b}
+      GROQ_OPERATIONS_MODEL: ${GROQ_OPERATIONS_MODEL:-openai/gpt-oss-20b}
+      ENABLE_EMAIL_NOTIFICATIONS: "true"
+      GOOGLE_EMAIL_ID: ${GOOGLE_EMAIL_ID}
+      GOOGLE_APP_PASSWORD: ${GOOGLE_APP_PASSWORD}
+      REPAIR_NOTIFICATION_EMAIL: ${REPAIR_NOTIFICATION_EMAIL:-${GOOGLE_EMAIL_ID}}
 
     networks:
       - app-network
@@ -143,6 +152,7 @@ services:
 
     volumes:
       - ./night-shift-worker-agent:/app
+      - ./:/source:ro
       - /var/run/docker.sock:/var/run/docker.sock
       - worker_workspaces:/workspaces
 

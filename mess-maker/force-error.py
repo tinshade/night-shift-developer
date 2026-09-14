@@ -14,7 +14,8 @@ parser.add_argument(
 
 
 def force_error_with_delete():
-    url = "http://fastapi:8000/users/9999"
+    missing_user_id = randint(1000000, 9999999)
+    url = f"http://fastapi:8000/users/{missing_user_id}"
     response = requests.delete(url, timeout=10)
     print(f"DELETE request to {url} returned status code {response.status_code} and response: {response.json()}")
     if response.status_code != 404:
@@ -32,8 +33,7 @@ def force_error_with_post():
     print(f"POST request to {create_url} returned status code {response.status_code} and response: {response.json()}")
     response.raise_for_status()
 
-    user_id = response.json()["id"]
-    delete_url = f"http://fastapi:8000/users/{user_id + 1000000}"
+    delete_url = f"http://fastapi:8000/users/{randint(1000000, 9999999)}"
     error_response = requests.delete(delete_url, timeout=10)
     print(f"DELETE request to {delete_url} returned status code {error_response.status_code} and response: {error_response.json()}")
     if error_response.status_code != 404:
