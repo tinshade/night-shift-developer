@@ -2,49 +2,64 @@ import requests
 import argparse
 from random import randint
 
-parser = argparse.ArgumentParser(description="Force an error in the API server.")
-parser.add_argument("--mode", type=str, required=False, help="The type of API endpoint to call.")
+parser = argparse.ArgumentParser(description="Trigger application errors in the API server.")
+parser.add_argument(
+    "--mode",
+    choices=("delete", "post"),
+    required=False,
+    help="The error scenario to trigger. Defaults to a random scenario.",
+)
 
 
 
 
-def force_error_with_get():
-    url = "http://fastapi:8000/users/9999"  # Assuming this ID does not exist
-    response = requests.get(url)
-    print(f"GET request to {url} returned status code {response.status_code} and response: {response.json()}")
+def force_error_with_delete():
+    url = "http://fastapi:8000/users/9999"
+    response = requests.delete(url, timeout=10)
+    print(f"DELETE request to {url} returned status code {response.status_code} and response: {response.json()}")
+    if response.status_code != 404:
+        raise RuntimeError(f"Expected the missing-user error, received HTTP {response.status_code}.")
     
 def force_error_with_post():
-    url = "http://fastapi:8000/users/create"
+    """Exercise the create route with a valid payload, then force a logged delete error."""
+    create_url = "http://fastapi:8000/users/create"
     payload = {
-        "first_name": None,  # This will cause an error when trying to call .title() on it
+        "first_name": "Night Shift",
         "last_name": "Doe",
-        "email": "johndoe@example.com"
+        "email": f"night-shift-{randint(100000, 999999)}@example.com",
     }
-    response = requests.post(url, json=payload)
-    print(f"POST request to {url} returned status code {response.status_code} and response: {response.json()}")
+    response = requests.post(create_url, json=payload, timeout=10)
+    print(f"POST request to {create_url} returned status code {response.status_code} and response: {response.json()}")
+    response.raise_for_status()
+
+    user_id = response.json()["id"]
+    delete_url = f"http://fastapi:8000/users/{user_id + 1000000}"
+    error_response = requests.delete(delete_url, timeout=10)
+    print(f"DELETE request to {delete_url} returned status code {error_response.status_code} and response: {error_response.json()}")
+    if error_response.status_code != 404:
+        raise RuntimeError(f"Expected the missing-user error, received HTTP {error_response.status_code}.")
     
 
 
 def main():
     args = parser.parse_args()
-    mode = args.mode.lower() if args.mode else None
+    mode = args.mode
     
     if not mode:
         modes = {
-            1: force_error_with_get,
+            1: force_error_with_delete,
             2: force_error_with_post
         }
         
         random_mode = randint(1, 2)
-        mode = modes[random_mode]()
+        modes[random_mode]()
+        return
         
 
-    if mode == "get":
-        force_error_with_get()
+    if mode == "delete":
+        force_error_with_delete()
     elif mode == "post":
         force_error_with_post()
-    else:
-        print("Invalid mode. Use 'get' or 'post'.")
 
 
 if __name__ == "__main__":

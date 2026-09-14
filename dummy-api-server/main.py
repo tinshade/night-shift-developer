@@ -10,7 +10,6 @@ import logging
 import traceback
 from datetime import datetime
 from contextlib import asynccontextmanager
-from threading import Thread
 
 
 # Log manager
@@ -62,22 +61,14 @@ def custom_function(guid: str, record: dict[str, str]) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Trigger table creation on app startup
-    await init_models()
-    worker = Thread(
-        target=log_manager.consume,
-        args=(custom_function,),
-        kwargs={"consumer_name": "api-worker"},
-        daemon=True,
-    )
-    worker.start()
+    init_models()
     yield
     # Clean up engine connections on shutdown
-    await engine.dispose()
+    engine.dispose()
 
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(router)
-models.Base.metadata.create_all(bind=engine) # Ensure that DB connection is able to create new tables
 
 @app.get("/", status_code=200)
 @app.get("/health", status_code=200)
