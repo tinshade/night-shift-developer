@@ -64,7 +64,12 @@ class DockerMCP:
         if spec.network:
             args.extend(["--network", spec.network])
         if spec.healthcheck:
-            args.extend(["--health-cmd", spec.healthcheck, "--health-interval", "5s", "--health-timeout", "3s", "--health-retries", "12"])
+            healthcheck = spec.healthcheck
+            for prefix in ("CMD-SHELL ", "CMD "):
+                if healthcheck.startswith(prefix):
+                    healthcheck = healthcheck[len(prefix):]
+                    break
+            args.extend(["--health-cmd", healthcheck, "--health-interval", "5s", "--health-timeout", "3s", "--health-retries", "12"])
         for key, value in (spec.env or {}).items():
             args.extend(["--env", f"{key}={value}"])
         for container_port, host_port in (spec.ports or {}).items():

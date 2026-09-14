@@ -4,10 +4,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import os
 import shlex
+import logging
 from typing import Any
 
 from tools.docker_mcp import DockerContainerSpec
 from tools.base import ToolError
+
+logger = logging.getLogger("night-shift-repair-runner")
 
 
 @dataclass
@@ -27,6 +30,7 @@ class IsolatedRepairRunner:
         self.timeout_seconds = timeout_seconds
 
     def run(self, guid: str, source_path: str) -> RepairDiagnostics:
+        logger.info("Starting isolated repair guid=%s source=%s", guid, source_path)
         prefix = f"repair_{guid}"
         image = f"{prefix}:latest"
         network = f"{prefix}_network"
@@ -41,6 +45,7 @@ class IsolatedRepairRunner:
             dockerfile = api_source / "Dockerfile"
             build_context = api_source if dockerfile.exists() else Path(source_path)
             self.registry.call("build_image", context=str(build_context), dockerfile=str(dockerfile) if dockerfile.exists() else None, tag=image)
+            logger.info("Built repair image=%s", image)
             self.registry.call("create_network", name=network)
             self.registry.call("create_volume", name=postgres_volume)
             self.registry.call("create_volume", name=redis_volume)
@@ -72,7 +77,15 @@ class IsolatedRepairRunner:
                     image=image,
                     name=containers[2],
                     network=network,
-                    env={"POSTGRES_HOST": containers[0], "REDIS_HOST": containers[1]},
+                    env={
+                        "POSTGRES_HOST": containers[0],
+                        "POSTGRES_PORT": "5432",
+                        "POSTGRES_USER": "repair",
+                        "POSTGRES_PASSWORD": "repair",
+                        "POSTGRES_DB": "repair",
+                        "REDIS_HOST": containers[1],
+                        "REDIS_PORT": "6379",
+                    },
                     volumes=[f"{api_source}:/app"],
                     command=[],
                     healthcheck="CMD-SHELL python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')\"",
@@ -86,6 +99,7 @@ class IsolatedRepairRunner:
             self.registry.call("start_container", container_id=containers[2])
             if not self.registry.call("wait_for_health", container_id=containers[2], timeout_seconds=60):
                 raise ToolError(f"Repair container did not become ready: {containers[2]}")
+            logger.info("Repair services healthy guid=%s", guid)
             validation_command = os.getenv(
                 "REPAIR_VALIDATION_COMMAND",
                 "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')\"",
@@ -99,7 +113,9 @@ class IsolatedRepairRunner:
             for container in containers:
                 output.append(f"[{container}]\n{self.registry.call('read_logs', container_id=container)}")
             passed = True
+            logger.info("Repair validation passed guid=%s", guid)
         except Exception as exc:
+            logger.exception("Repair validation failed guid=%s", guid)
             output.append(str(exc))
             for container in containers:
                 try:

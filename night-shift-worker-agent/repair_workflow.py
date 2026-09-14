@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -9,6 +11,8 @@ from typing import Any
 from repair_llm import LLMRepairClient
 from repair_runner import IsolatedRepairRunner, RepairDiagnostics
 from repair_session import RepairSession
+
+logger = logging.getLogger("night-shift-repair-workflow")
 
 
 @dataclass
@@ -33,6 +37,24 @@ class RepairWorkflow:
         self.runner = runner or IsolatedRepairRunner(registry, int(os.getenv("REPAIR_TIMEOUT_SECONDS", "600")))
         self.llm_client = llm_client or LLMRepairClient(registry)
 
+    @staticmethod
+    def _repair_branch_name(guid: str, record: dict) -> str:
+        error_text = record.get("message") or record.get("exception_type") or "application-error"
+        slug = re.sub(r"[^a-z0-9]+", "-", error_text.lower()).strip("-")[:60]
+        slug = slug or "application-error"
+        return f"ai-fix/{slug}-{guid[:8]}"
+
+    @staticmethod
+    def _notification_diagnostics(record: dict, repair_diagnostics: str) -> str:
+        sections = []
+        if record.get("message"):
+            sections.append(f"Original error:\n{record['message']}")
+        if record.get("trace"):
+            sections.append(f"Stacktrace:\n{record['trace']}")
+        if repair_diagnostics:
+            sections.append(f"Repair diagnostics:\n{repair_diagnostics}")
+        return "\n\n".join(sections)
+
     def run(self, guid: str, source_repo: str | Path, record: dict | None = None, *, max_attempts: int | None = None) -> RepairWorkflowResult:
         attempt = self.session.begin(guid=guid, source_repo=source_repo)
         max_attempts = max_attempts or int(os.getenv("MAX_REPAIR_ATTEMPTS", "3"))
@@ -41,6 +63,7 @@ class RepairWorkflow:
         cleanup_errors: list[str] = []
 
         for attempt_index in range(max_attempts):
+            logger.info("Starting repair attempt guid=%s attempt=%s/%s", guid, attempt_index + 1, max_attempts)
             try:
                 diagnostics = self.runner.run(guid, attempt.source_path)
             except Exception as exc:
@@ -60,6 +83,7 @@ class RepairWorkflow:
             if not diagnostics.cleanup_ok:
                 cleanup_errors.append(diagnostics.cleanup_error)
             if diagnostics.passed:
+                logger.info("Repair validation passed guid=%s", guid)
                 final = RepairWorkflowResult(
                     status="fixed",
                     summary="Validation passed in the isolated repair environment.",
@@ -67,7 +91,7 @@ class RepairWorkflow:
                 )
                 if os.getenv("ENABLE_GITHUB_REPAIR", "false").lower() == "true":
                     try:
-                        branch = f"repair/{guid}"
+                        branch = self._repair_branch_name(guid, record)
                         final.pr_url = self.registry.call(
                             "publish_repair",
                             workspace=attempt.source_path,
@@ -86,6 +110,7 @@ class RepairWorkflow:
                 )
                 break
             try:
+                logger.info("Requesting Groq repair patch guid=%s", guid)
                 patch = self.llm_client.propose_and_apply(record, diagnostics.output, attempt.source_path)
             except Exception as exc:
                 final = RepairWorkflowResult(status="wontfix", summary=f"LLM repair failed: {exc}", remaining_error=diagnostics.output)
@@ -117,7 +142,7 @@ class RepairWorkflow:
                     guid=guid,
                     summary=final.summary,
                     pr_url=final.pr_url or None,
-                    diagnostics=final.remaining_error or None,
+                    diagnostics=self._notification_diagnostics(record, final.remaining_error) or None,
                 )
             except Exception as exc:
                 final.notification_error = str(exc)
@@ -135,4 +160,5 @@ class RepairWorkflow:
         except Exception as exc:
             final.cleanup_ok = False
             final.cleanup_error = "\n".join(filter(None, [final.cleanup_error, f"delete_workspace {guid}: {exc}"]))
+        logger.info("Repair workflow completed guid=%s status=%s", guid, final.status)
         return final
