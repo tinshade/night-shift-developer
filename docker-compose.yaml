@@ -1,0 +1,169 @@
+services:
+  fastapi:
+    build:
+      context: ./dummy-api-server
+      dockerfile: Dockerfile
+
+    container_name: dummy_api_server
+
+    env_file:
+      - ./dummy-api-server/.env
+
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+    ports:
+      - "8000:8000"
+
+    networks:
+      - app-network
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    volumes:
+      - ./dummy-api-server:/app
+      - app-logs:/app/logs
+
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+
+    container_name: postgres_db
+
+    env_file:
+      - ./dummy-api-server/.env
+
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dummy_db_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: ${POSTGRES_DB:-dummy_db}
+      POSTGRES_PORT: 5432
+
+    networks:
+      - app-network
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+
+    container_name: redis
+
+    ports:
+      - "6379:6379"
+
+    networks:
+      - app-network
+
+    volumes:
+      - redis_data:/data
+
+    command: redis-server --appendonly yes
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+    restart: unless-stopped
+
+  error-generator:
+    build:
+      context: ./mess-maker
+      dockerfile: Dockerfile
+
+    container_name: error_generator
+
+    networks:
+      - app-network
+
+    environment:
+      API_URL: http://fastapi:8000
+
+    depends_on:
+      fastapi:
+        condition: service_healthy
+
+    volumes:
+      - ./mess-maker:/app
+
+    command: ["cron", "-f"]
+
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./night-shift-worker-agent
+      dockerfile: Dockerfile
+
+    container_name: night_shift_worker
+
+    profiles:
+      - worker
+
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REPAIR_SOURCE_REPOSITORY: /source
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      GROQ_FREE_MODEL: ${GROQ_FREE_MODEL}
+      GROQ_CODE_MODEL: ${GROQ_CODE_MODEL:-openai/gpt-oss-120b}
+      GROQ_OPERATIONS_MODEL: ${GROQ_OPERATIONS_MODEL:-openai/gpt-oss-20b}
+      ENABLE_EMAIL_NOTIFICATIONS: "true"
+      GOOGLE_EMAIL_ID: ${GOOGLE_EMAIL_ID}
+      GOOGLE_APP_PASSWORD: ${GOOGLE_APP_PASSWORD}
+      REPAIR_NOTIFICATION_EMAIL: ${REPAIR_NOTIFICATION_EMAIL:-${GOOGLE_EMAIL_ID}}
+
+    networks:
+      - app-network
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    volumes:
+      - ./night-shift-worker-agent:/app
+      - ./:/source:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - worker_workspaces:/workspaces
+
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  app-logs:
+  redis_data:
+  worker_workspaces:
+
+networks:
+  app-network:
+    driver: bridge
