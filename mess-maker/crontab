@@ -1,1 +1,1 @@
-0 * * * * cd /app && python force-error.py >> /var/log/cron.log 2>&1
+0 * * * * cd /app && python force-error.py --bug ${FORCE_ERROR_BUG:-random} >> /var/log/cron.log 2>&1

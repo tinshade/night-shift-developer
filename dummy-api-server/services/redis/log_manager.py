@@ -240,6 +240,15 @@ class LogManager:
         record = self.redis_client.hgetall(f"log:{guid}")
         return record or None
 
+    KNOWN_STATUSES = ("open", "in_progress", "fixed", "wontfix", "duplicate")
+
+    def count_by_status(self) -> dict[str, int]:
+        """How many logs currently sit in each repair status."""
+        return {
+            status: int(self.redis_client.scard(self._status_key(status)) or 0)
+            for status in self.KNOWN_STATUSES
+        }
+
     def set_status(self, guid: str, new_status: str):
         old = self.redis_client.hget(f"log:{guid}", "status")
         if old is None:

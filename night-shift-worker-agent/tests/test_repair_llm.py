@@ -16,13 +16,15 @@ class FakeResponse:
 
 
 class FakeLLM:
-    def __init__(self, content):
-        self.content = content
+    """Replays a fixed list of responses (selection phase, then patch phase)."""
+
+    def __init__(self, *contents):
+        self.contents = list(contents)
         self.messages = None
 
     def invoke(self, messages):
         self.messages = messages
-        return FakeResponse(self.content)
+        return FakeResponse(self.contents.pop(0) if len(self.contents) > 1 else self.contents[0])
 
 
 def test_groq_response_applies_structured_patch(tmp_path):
@@ -30,14 +32,16 @@ def test_groq_response_applies_structured_patch(tmp_path):
     registry = MCPRegistry(str(workspace_root))
     source = workspace_root / "source"
     source.mkdir(parents=True)
+    (source / "app.py").write_text("print('broken')\n", encoding="utf-8")
     llm = FakeLLM(
+        json.dumps({"reason": "only one file", "files": ["app.py"]}),
         "```json\n"
         + json.dumps({
             "status": "fixed",
             "summary": "Patched the source.",
-            "files": [{"path": "app.py", "content": "print('fixed')\n"}],
+            "edits": [{"path": "app.py", "old": "print('broken')", "new": "print('fixed')"}],
         })
-        + "\n```"
+        + "\n```",
     )
     client = LLMRepairClient(registry, llm=llm)
 
@@ -52,9 +56,10 @@ def test_groq_response_applies_structured_patch(tmp_path):
 def test_groq_configuration_is_required(monkeypatch, tmp_path):
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_FREE_MODEL", raising=False)
+    monkeypatch.delenv("GROQ_CODE_MODEL", raising=False)
     client = LLMRepairClient(MCPRegistry(str(tmp_path / "workspaces")))
 
-    with pytest.raises(ToolError, match="GROQ_API_KEY and GROQ_FREE_MODEL"):
+    with pytest.raises(ToolError, match="GROQ_API_KEY and GROQ_CODE_MODEL"):
         client.propose_and_apply({}, "diagnostics", str(tmp_path))
 
 
@@ -63,15 +68,20 @@ def test_groq_rejects_unsafe_patch_path(tmp_path):
     registry = MCPRegistry(str(workspace_root))
     source = workspace_root / "source"
     source.mkdir(parents=True)
-    llm = FakeLLM(json.dumps({
-        "status": "fixed",
-        "summary": "unsafe",
-        "files": [{"path": "../outside.py", "content": "bad"}],
-    }))
+    (source / "app.py").write_text("print('broken')\n", encoding="utf-8")
+    llm = FakeLLM(
+        json.dumps({"reason": "only one file", "files": ["app.py"]}),
+        json.dumps({
+            "status": "fixed",
+            "summary": "unsafe",
+            "edits": [{"path": "../outside.py", "old": "x", "new": "bad"}],
+        }),
+    )
     client = LLMRepairClient(registry, llm=llm)
 
     with pytest.raises(ToolError, match="outside the repair source"):
         client.propose_and_apply({}, "diagnostics", str(source))
+    assert not (workspace_root / "outside.py").exists()
 
 
 def test_model_roles_use_separate_free_model_settings(monkeypatch):
