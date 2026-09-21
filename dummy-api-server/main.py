@@ -1,5 +1,6 @@
 from typing import List
-from fastapi import FastAPI, HTTPException, Depends, APIRouter
+from fastapi import FastAPI, HTTPException, Depends, APIRouter, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 import os
 import models
@@ -51,6 +52,24 @@ def write_application_log(
         status=status,
     )
 
+
+def report_exception(message: str) -> None:
+    """Record an unexpected failure so the night-shift worker can pick it up.
+
+    Only genuine defects go through here. An expected 4xx (a missing record, a
+    bad payload) is normal behaviour and must NOT be logged at ERROR level, or
+    the repair pipeline will be handed work that has nothing to fix.
+    """
+    trace = traceback.format_exc()
+    logger.exception(message)
+    log_manager.write_log(
+        log_type="ERROR",
+        application_name=APPLICATION_NAME,
+        message=message,
+        trace=trace,
+    )
+
+
 # Initialize FastAPI application
 def custom_function(guid: str, record: dict[str, str]) -> str:
     """Perform the application-specific action for an error log."""
@@ -70,10 +89,26 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.include_router(router)
 
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Turn any unhandled failure into an ERROR log the repair worker can claim.
+
+    Without this, a defect that raises outside a route's own try/except - a
+    ZeroDivisionError in a handler, a ResponseValidationError during
+    serialisation - returns 500 to the caller but never reaches Redis, so the
+    night-shift worker is never woken up.
+
+    HTTPException is deliberately not routed here: a 404 or 422 is expected
+    behaviour, and FastAPI's own handler deals with it.
+    """
+    report_exception(f"{type(exc).__name__}: {exc} at {request.method} {request.url.path}")
+    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
+
+
 @app.get("/", status_code=200)
 @app.get("/health", status_code=200)
 def health_check():
-    write_application_log("INFO", "Health-check was invoked. Status = Healthy")
     return {"message": "Server is up!"}
 
 
@@ -89,6 +124,15 @@ def write_log(log_payload: schemas.LogCreate):
     return log_manager.get_log(guid)
 
 
+@app.get("/logs/stats", status_code=200)
+def log_stats(status: str = "open"):
+    """Report how many logs sit in each repair status."""
+    counts = log_manager.count_by_status()
+    selected = counts.get(status, 0)
+    share = counts.get("open", 0) / selected if selected else 0.0
+    return {"counts": counts, "status": status, "open_share": share}
+
+
 @app.get(
     "/logs/{guid}",
     response_model=schemas.LogRecord,
@@ -101,10 +145,9 @@ def get_log(guid: str):
     return record
 
 
-@router.post("/create", status_code=201, response_model=schemas.UserBase)
+@router.post("/create", status_code=201, response_model=schemas.UserRead)
 def create_user(user_payload: schemas.UserBase, db:Session = Depends(get_db)):
     try:
-        # Code bug: Assumes first_name is always a string and attempts string method call
         formatted_name = user_payload.first_name.title()
 
         new_user = models.User(**user_payload.dict())
@@ -114,37 +157,32 @@ def create_user(user_payload: schemas.UserBase, db:Session = Depends(get_db)):
         write_application_log("INFO", f"New user named {formatted_name} was created")
         return new_user
     except Exception as e:
-        message = "Error while creating user"
-        trace = traceback.format_exc()
-        logger.exception(message)
-        log_manager.write_log(
-            log_type="ERROR",
-            application_name=APPLICATION_NAME,
-            message=message,
-            trace=trace,
-        )
+        db.rollback()
+        report_exception("Error while creating user")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/{id}", status_code=200, response_model=List[schemas.UserBase])
-def get_users(id:int|None=None, db:Session = Depends(get_db)):
-    result = None
-    if id:
-        result = db.query(models.User).filter(models.User.id == id).first()
-        write_application_log("INFO", f"Ran get user for id {id}")
-        return [result]
-    result = db.query(models.User).all()
-    write_application_log("INFO", f"Ran get users at {datetime.now()}")
-    return result
+
+@router.get("/", status_code=200, response_model=List[schemas.UserRead])
+def list_users(limit: int = 10, offset: int = 0, db:Session = Depends(get_db)):
+    """Return a page of users. `limit` caps the page size, `offset` skips rows."""
+    users = db.query(models.User).order_by(models.User.id).offset(offset).limit(limit).all()
+    write_application_log("INFO", f"Listed users limit={limit} offset={offset} at {datetime.now()}")
+    return users
+
+
+@router.get("/{id}", status_code=200, response_model=schemas.UserRead)
+def get_user(id:int, db:Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.id == id).first()
+    write_application_log("INFO", f"Ran get user for id {id}")
+    return user
 
 
 @router.delete("/{id}", status_code=200)
 def delete_user(id:int, db:Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.id == id).first()
     if not user:
-        write_application_log(
-            "ERROR",
-            f"Tried to delete a non-existing user with id {id}",
-        )
+        # Expected condition, not a defect. See get_user above.
+        logger.warning("Tried to delete a non-existing user with id %s", id)
         raise HTTPException(status_code = 404, detail=f"No user found with id {id}")
     db.delete(user)
     db.commit()
