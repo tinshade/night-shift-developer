@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY force-error.py .
+COPY force-error.py bug_catalogue.py seed_bugs.py ./
 
 RUN pip install --no-cache-dir requests \
     && apt-get update \

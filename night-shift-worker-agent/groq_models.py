@@ -7,7 +7,13 @@ CODE_MODEL_DEFAULT = "openai/gpt-oss-120b"
 OPERATIONS_MODEL_DEFAULT = "openai/gpt-oss-20b"
 
 
-def create_groq_model(role: str, *, api_key: str | None = None, model: str | None = None) -> Any:
+def create_groq_model(
+    role: str,
+    *,
+    api_key: str | None = None,
+    model: str | None = None,
+    max_tokens: int | None = None,
+) -> Any:
     """Create a Groq LangChain model for the requested task role."""
     from tools.base import ToolError
 
@@ -24,9 +30,25 @@ def create_groq_model(role: str, *, api_key: str | None = None, model: str | Non
 
     from langchain.chat_models import init_chat_model
 
-    return init_chat_model(
-        model=model_name,
-        model_provider="groq",
-        temperature=0,
-        api_key=key,
-    )
+    kwargs: dict[str, Any] = {
+        "model": model_name,
+        "model_provider": "groq",
+        "temperature": 0,
+        "api_key": key,
+        "max_tokens": max_tokens or int(os.getenv("LLM_MAX_TOKENS", "4000")),
+    }
+
+    # gpt-oss models are reasoning models. Keep the chain-of-thought out of
+    # `content` so JSON parsing stays reliable, and keep it short so the free
+    # tier's 8k tokens-per-minute budget is not spent on reasoning.
+    if "gpt-oss" in model_name:
+        kwargs["reasoning_format"] = os.getenv("GROQ_REASONING_FORMAT", "hidden")
+        kwargs["reasoning_effort"] = os.getenv("GROQ_REASONING_EFFORT", "medium")
+
+    try:
+        return init_chat_model(**kwargs)
+    except TypeError:
+        # Older langchain-groq does not expose the reasoning_* parameters.
+        for key_name in ("reasoning_format", "reasoning_effort"):
+            kwargs.pop(key_name, None)
+        return init_chat_model(**kwargs)

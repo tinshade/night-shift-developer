@@ -21,26 +21,28 @@ Keep credentials in a local `.env` file. Never commit `.env` or include credenti
 
 ## Configuration
 
-Create or update the root `.env` file:
+Two env files are needed. **`docker compose` refuses to start if
+`dummy-api-server/.env` is missing**, so copy both:
+
+```bash
+cp .env.example .env
+cp dummy-api-server/.env.example dummy-api-server/.env
+```
+
+Then put your Groq key in the root `.env`:
 
 ```env
 GROQ_API_KEY=your-groq-api-key
-GROQ_FREE_MODEL=openai/gpt-oss-120b
-GROQ_CODE_MODEL=openai/gpt-oss-120b
-GROQ_OPERATIONS_MODEL=openai/gpt-oss-20b
-
-# Optional GitHub integration
-GITHUB_PERSONAL_ACCESS_TOKEN=your-github-token
-GITHUB_OWNER=your-github-owner
-GITHUB_REPOSITORY=your-github-repository
-
-# Optional Gmail notifications
-GOOGLE_EMAIL_ID=sender@gmail.com
-GOOGLE_APP_PASSWORD=your-gmail-app-password
-REPAIR_NOTIFICATION_EMAIL=recipient@example.com
 ```
 
-The code model is used for diagnosis and patches. The operations model is used for optional GitHub PR and email drafting.
+Everything else has a working default. The database credentials live in the
+**root** `.env` only - `docker-compose.yaml` injects them into both the
+`postgres` and `fastapi` containers from the same variables, so they cannot
+drift apart.
+
+The code model diagnoses and patches. The operations model handles optional
+GitHub PR and email drafting. GitHub and Gmail are off by default
+(`ENABLE_GITHUB_REPAIR`, `ENABLE_EMAIL_NOTIFICATIONS`).
 
 ## Setup: Linux
 
@@ -92,8 +94,12 @@ docker compose --profile worker ps
 The FastAPI service is available at `http://localhost:8000`. Useful endpoints include:
 
 - `GET /health`
+- `GET /users/` - paginated, takes `limit` and `offset`
 - `GET /users/{id}`
 - `POST /users/create`
+- `DELETE /users/{id}`
+- `GET /logs/stats` - log counts by repair status
+- `GET /docs` - interactive API docs
 
 View logs:
 
@@ -102,18 +108,34 @@ docker compose logs -f fastapi
 docker compose logs -f worker
 ```
 
-## Trigger a Test Error
+## Seed a Bug and Watch It Get Fixed
 
-The error generator can trigger a real application error manually:
+The committed source is clean. Defects are injected on demand - see
+[REPRODUCIBLE_BUGS.md](REPRODUCIBLE_BUGS.md) for the full catalogue.
 
 ```bash
-docker compose exec error-generator python force-error.py --mode delete
-docker compose exec error-generator python force-error.py --mode post
+# 1. break something (B1, B2, B3, B4, or random)
+python mess-maker/seed_bugs.py --seed B1
+
+# 2. rebuild the API so the change is live
+docker compose up -d --build fastapi
+
+# 3. confirm it reproduces
+docker compose exec fastapi python -m pytest -q tests/test_api_contract.py
+docker compose run --rm error-generator python force-error.py --bug B1
+
+# 4. watch the worker pick it up
+docker compose logs -f worker
+
+# 5. put it back
+python mess-maker/seed_bugs.py --revert all
 ```
 
-Both scenarios attempt to delete a nonexistent user, causing the API to write an `ERROR` record to Redis. The worker consumes the error stream and attempts isolated validation and repair.
+`seed_bugs.py --status` shows what is currently broken. Seeding is idempotent
+and refuses to touch a file that has drifted from the catalogue.
 
-The cron container also runs the generator automatically according to `mess-maker/crontab`.
+The cron container also runs the generator hourly per `mess-maker/crontab`,
+using whichever bug `FORCE_ERROR_BUG` names.
 
 ## Validate the Installation
 
@@ -140,7 +162,9 @@ The cron container also runs the generator automatically according to `mess-make
 3. Trigger an error and inspect the worker:
 
 	```bash
-	docker compose exec error-generator python force-error.py --mode delete
+	python mess-maker/seed_bugs.py --seed B1
+	docker compose up -d --build fastapi
+	docker compose run --rm error-generator python force-error.py --bug B1
 	docker compose logs --tail=100 worker
 	```
 
@@ -157,6 +181,12 @@ The cron container also runs the generator automatically according to `mess-make
 	```bash
 	cd night-shift-worker-agent
 	python -m pytest tests -q
+	```
+
+	The API contract suite needs Postgres and Redis, so run it in the container:
+
+	```bash
+	docker compose exec fastapi python -m pytest -q tests/test_api_contract.py
 	```
 
 	On Windows, use the project virtual environment if available:

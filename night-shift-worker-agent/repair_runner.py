@@ -86,7 +86,11 @@ class IsolatedRepairRunner:
                         "REDIS_HOST": containers[1],
                         "REDIS_PORT": "6379",
                     },
-                    volumes=[f"{api_source}:/app"],
+                    # NOTE: no bind mount here. The worker runs in a container and
+                    # talks to the HOST docker daemon, so a host bind mount of
+                    # /workspaces/<guid>/... would resolve to a non-existent host
+                    # path and silently mount an empty directory over /app.
+                    # build_image already baked the patched source into the image.
                     command=[],
                     healthcheck="CMD-SHELL python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')\"",
                 ),
@@ -100,9 +104,11 @@ class IsolatedRepairRunner:
             if not self.registry.call("wait_for_health", container_id=containers[2], timeout_seconds=60):
                 raise ToolError(f"Repair container did not become ready: {containers[2]}")
             logger.info("Repair services healthy guid=%s", guid)
+            # The validation command MUST exercise the reported defect. A bare
+            # /health probe can go green while the bug is untouched.
             validation_command = os.getenv(
                 "REPAIR_VALIDATION_COMMAND",
-                "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')\"",
+                "python -m pytest -q --no-header -p no:cacheprovider tests/test_api_contract.py",
             )
             health = self.registry.call(
                 "exec_command",
@@ -144,7 +150,7 @@ class IsolatedRepairRunner:
         return RepairDiagnostics(
             passed=passed,
             output="\n".join(output),
-            tests_run=[os.getenv("REPAIR_VALIDATION_COMMAND", "GET /health")],
+            tests_run=[os.getenv("REPAIR_VALIDATION_COMMAND", "pytest tests/test_api_contract.py")],
             cleanup_ok=not cleanup_errors,
             cleanup_error="\n".join(cleanup_errors),
         )

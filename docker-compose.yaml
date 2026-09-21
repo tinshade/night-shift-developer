@@ -12,6 +12,10 @@ services:
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
+      # Same substitution the postgres service uses, so the two can never drift.
+      POSTGRES_USER: ${POSTGRES_USER:-dummy_db_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: ${POSTGRES_DB:-dummy_db}
       REDIS_HOST: redis
       REDIS_PORT: 6379
 
@@ -108,6 +112,9 @@ services:
 
     environment:
       API_URL: http://fastapi:8000
+      # Which seeded defect the hourly cron run should exercise.
+      # B1 | B2 | B3 | B4 | random  (see mess-maker/bug_catalogue.py)
+      FORCE_ERROR_BUG: ${FORCE_ERROR_BUG:-random}
 
     depends_on:
       fastapi:
@@ -138,10 +145,16 @@ services:
       GROQ_FREE_MODEL: ${GROQ_FREE_MODEL}
       GROQ_CODE_MODEL: ${GROQ_CODE_MODEL:-openai/gpt-oss-120b}
       GROQ_OPERATIONS_MODEL: ${GROQ_OPERATIONS_MODEL:-openai/gpt-oss-20b}
-      ENABLE_EMAIL_NOTIFICATIONS: "true"
+      ENABLE_EMAIL_NOTIFICATIONS: ${ENABLE_EMAIL_NOTIFICATIONS:-false}
+      ENABLE_GITHUB_REPAIR: ${ENABLE_GITHUB_REPAIR:-false}
+      GITHUB_PERSONAL_ACCESS_TOKEN: ${GITHUB_PERSONAL_ACCESS_TOKEN:-}
+      GITHUB_OWNER: ${GITHUB_OWNER:-}
+      GITHUB_REPOSITORY: ${GITHUB_REPOSITORY:-}
       GOOGLE_EMAIL_ID: ${GOOGLE_EMAIL_ID}
       GOOGLE_APP_PASSWORD: ${GOOGLE_APP_PASSWORD}
       REPAIR_NOTIFICATION_EMAIL: ${REPAIR_NOTIFICATION_EMAIL:-${GOOGLE_EMAIL_ID}}
+      REPAIR_VALIDATION_COMMAND: ${REPAIR_VALIDATION_COMMAND:-python -m pytest -q --no-header -p no:cacheprovider tests/test_api_contract.py}
+      MAX_REPAIR_ATTEMPTS: ${MAX_REPAIR_ATTEMPTS:-3}
 
     networks:
       - app-network

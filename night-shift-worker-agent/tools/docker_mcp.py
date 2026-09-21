@@ -38,7 +38,11 @@ class DockerMCP:
                 timeout=timeout or self.command_timeout,
             )
         except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            detail = getattr(exc, "stderr", "") or str(exc)
+            # pytest reports failures on STDOUT, so stderr alone loses the whole
+            # diagnosis and the repair agent is handed "exit status 1".
+            stdout = (getattr(exc, "stdout", "") or "").strip()
+            stderr = (getattr(exc, "stderr", "") or "").strip()
+            detail = "\n".join(part for part in (stderr, stdout) if part) or str(exc)
             raise ToolError(f"Docker operation failed: {detail}") from exc
         return completed.stdout.strip()
 
@@ -104,10 +108,11 @@ class DockerMCP:
             raise ToolError("Container id is required for exec.")
         return self._run(["exec", container_id, *command])
 
-    def read_logs(self, container_id: str) -> str:
+    def read_logs(self, container_id: str, tail: int | str = 80) -> str:
         if not container_id:
             raise ToolError("Container id is required for logs.")
-        return self._run(["logs", container_id])
+        # Unbounded logs blow the Groq free-tier 8k tokens-per-minute budget.
+        return self._run(["logs", "--tail", str(tail), container_id])
 
     def stop_container(self, container_id: str) -> bool:
         if not container_id:

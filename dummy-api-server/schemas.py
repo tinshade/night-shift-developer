@@ -17,6 +17,14 @@ class UserCreate(UserBase):
     pass
 
 
+class UserRead(UserBase):
+    """A user as returned by read endpoints - includes the primary key."""
+    id: int
+
+    class Config:
+        from_attributes = True
+
+
 class User(UserBase):
     id: int
     created_at: datetime

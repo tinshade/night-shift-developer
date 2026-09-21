@@ -61,6 +61,8 @@ class RepairWorkflow:
         record = record or {}
         final = RepairWorkflowResult(status="wontfix", summary="Repair attempts were exhausted.")
         cleanup_errors: list[str] = []
+        files_changed: list[str] = []
+        last_llm_failure = ""
 
         for attempt_index in range(max_attempts):
             logger.info("Starting repair attempt guid=%s attempt=%s/%s", guid, attempt_index + 1, max_attempts)
@@ -88,6 +90,7 @@ class RepairWorkflow:
                     status="fixed",
                     summary="Validation passed in the isolated repair environment.",
                     tests_run=diagnostics.tests_run,
+                    files_changed=files_changed,
                 )
                 if os.getenv("ENABLE_GITHUB_REPAIR", "false").lower() == "true":
                     try:
@@ -107,18 +110,35 @@ class RepairWorkflow:
                     summary="Repair attempts were exhausted.",
                     tests_run=diagnostics.tests_run,
                     remaining_error=diagnostics.output,
+                    files_changed=files_changed,
                 )
                 break
             try:
                 logger.info("Requesting Groq repair patch guid=%s", guid)
-                patch = self.llm_client.propose_and_apply(record, diagnostics.output, attempt.source_path)
+                patch = self.llm_client.propose_and_apply(
+                    record,
+                    diagnostics.output,
+                    attempt.source_path,
+                    last_failure=last_llm_failure,
+                )
+                last_llm_failure = "\n".join(patch.get("edit_problems") or [])
             except Exception as exc:
-                final = RepairWorkflowResult(status="wontfix", summary=f"LLM repair failed: {exc}", remaining_error=diagnostics.output)
-                break
+                # A failed patch proposal is not fatal: tell the next attempt why
+                # it failed and let it try again within the attempt budget.
+                logger.warning("Groq repair patch failed guid=%s: %s", guid, exc)
+                last_llm_failure = str(exc)
+                final = RepairWorkflowResult(
+                    status="wontfix",
+                    summary=f"LLM repair failed: {exc}",
+                    remaining_error=diagnostics.output,
+                )
+                continue
+            applied = patch.get("files_changed") or [item.get("path", "") for item in patch.get("files", [])]
+            files_changed = sorted(set(files_changed) | {path for path in applied if path})
             self.session.update_result(
                 attempt,
                 summary=patch.get("summary", "LLM patch applied."),
-                files_changed=[item.get("path", "") for item in patch.get("files", [])],
+                files_changed=files_changed,
             )
             if patch.get("status") == "wontfix":
                 final = RepairWorkflowResult(status="wontfix", summary=patch.get("summary", "LLM declined repair."), remaining_error=diagnostics.output)
